@@ -8,7 +8,7 @@
 //	echo example.com | qr
 //
 // A scheme is added to bare inputs (example.com becomes https://example.com);
-// pass -raw to encode the text exactly as given.
+// pass --raw to encode the text exactly as given.
 package main
 
 import (
@@ -19,6 +19,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"reflect"
 	"strings"
 
 	qrcode "github.com/skip2/go-qrcode"
@@ -52,13 +53,17 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 
 	var (
 		level  = fs.String("level", "medium", "error correction level: low, medium, quartile, highest")
-		border = fs.Int("border", 4, "quiet zone width in modules")
-		plain  = fs.Bool("plain", false, "no ANSI colors; draw dark modules with block glyphs")
-		invert = fs.Bool("invert", false, "swap dark and light modules")
+		border = fs.Int("border", 2, "quiet zone width in modules")
+		plain  = fs.Bool("plain", false, "draw with block glyphs instead of ANSI colors, even on a terminal")
+		dark   = fs.Bool("dark", false, "the background is dark: light modules are drawn with blocks (plain output only)")
+		light  = fs.Bool("light", false, "the background is light, the default (plain output only)")
 		raw    = fs.Bool("raw", false, "encode input exactly, without adding a https:// scheme")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *dark && *light {
+		return errors.New("--dark and --light are mutually exclusive")
 	}
 
 	inputs := fs.Args()
@@ -87,9 +92,8 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return fmt.Errorf("border must not be negative, got %d", *border)
 	}
 
-	// Rendered colors are only useful on a terminal; redirects and pipes get
-	// plain block glyphs so the output stays readable in a file or pager.
-	usePlain := *plain || !isTerminal(stdout)
+	usePlain := usePlainOutput(*plain, isTerminal(stdout))
+	darkBG := *dark
 
 	printed := 0
 	for _, in := range inputs {
@@ -114,15 +118,15 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		if len(inputs) > 1 {
 			fmt.Fprintf(stdout, "%s\n", text)
 		}
-		if err := render(stdout, code.Bitmap(), *border, usePlain, *invert); err != nil {
+		if err := render(stdout, code.Bitmap(), *border, usePlain, darkBG); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// writeHelp prints the usage and examples screen. It is used both for -h and
-// when the command runs without input.
+// writeHelp prints the usage and examples screen. It is used both for --help
+// and when the command runs without input.
 func writeHelp(w io.Writer, fs *flag.FlagSet) {
 	fmt.Fprint(w, `Print a QR code for a URL, URI, or short text.
 
@@ -131,7 +135,12 @@ Usage:
   ... | qr [flags]
 
 Bare inputs get a https:// scheme, so "example.com" works as well as
-"notion://page". Use -raw to encode the text exactly as given.
+"notion://page". Use --raw to encode the text exactly as given.
+
+When the output is piped (a file, a pager, an agent) the code is drawn with
+plain block glyphs instead of ANSI colors. --plain forces that on a terminal
+too. Those glyphs use the terminal foreground color, so pass --dark when the
+background is dark.
 
 Examples:
   qr https://example.com
@@ -139,11 +148,108 @@ Examples:
   qr example.com
   qr a.example b.example
   echo example.com | qr
+  qr --dark example.com           # dark background, e.g. a dark terminal
+  qr --plain --dark example.com   # plain text, to paste into a chat
 
 Flags:
 `)
 	fs.SetOutput(w)
-	fs.PrintDefaults()
+	writeFlags(w, fs)
+
+	fmt.Fprint(w, `
+Agents:
+  Copy the lines between the fences below into AGENTS.md or CLAUDE.md, so an
+  agent prints a QR code for the links it shows you:
+
+`)
+	fmt.Fprintf(w, "%smarkdown\n%s\n", mdFence, agentSnippet)
+	fmt.Fprint(w, mdFence+"\n")
+}
+
+// mdFence delimits the copy-paste block in the help screen. The help text is a
+// raw string literal, so backticks cannot be written inline.
+const mdFence = "```"
+
+// agentSnippet is the AGENTS.md/CLAUDE.md rule advertised by the help screen.
+// Keep the lines short: it gets pasted into files that are read as plain text.
+const agentSnippet = `## Links
+
+When a reply includes a URL longer than 40 characters, also show a QR code:
+
+    qr --plain --dark "<url>"
+
+Paste the output unchanged in a fenced code block with no language tag.
+The glyphs are data, not ASCII art: do not re-wrap, re-indent or tidy them.
+Use --light instead of --dark on a light background.`
+
+// flagOrder lists the flags in the order the help screen shows them: output
+// format first, then code shape, then input handling.
+var flagOrder = []string{"plain", "dark", "light", "level", "border", "raw"}
+
+// writeFlags prints the flag list with the double-dash prefix used in the
+// examples. The flag package accepts both forms but prints single dashes, so
+// the list is built by hand instead of with PrintDefaults.
+func writeFlags(w io.Writer, fs *flag.FlagSet) {
+	printed := make(map[string]bool, len(flagOrder))
+	for _, name := range flagOrder {
+		if f := fs.Lookup(name); f != nil {
+			writeFlag(w, f)
+			printed[name] = true
+		}
+	}
+	// Anything new that is not in the order list above still shows up.
+	fs.VisitAll(func(f *flag.Flag) {
+		if !printed[f.Name] {
+			writeFlag(w, f)
+		}
+	})
+}
+
+func writeFlag(w io.Writer, f *flag.Flag) {
+	name, usage := flag.UnquoteUsage(f)
+	var b strings.Builder
+	b.WriteString("  --")
+	b.WriteString(f.Name)
+	if name != "" {
+		b.WriteString(" ")
+		b.WriteString(name)
+	}
+	b.WriteString("\n    \t")
+	b.WriteString(strings.ReplaceAll(usage, "\n", "\n    \t"))
+	if !isZeroValue(f) {
+		if isStringFlag(f) {
+			fmt.Fprintf(&b, " (default %q)", f.DefValue)
+		} else {
+			fmt.Fprintf(&b, " (default %v)", f.DefValue)
+		}
+	}
+	fmt.Fprint(w, b.String(), "\n")
+}
+
+// isZeroValue reports whether the flag's default is the zero value for its
+// type, in which case it is left out of the help text, matching the flag
+// package's own behaviour.
+func isZeroValue(f *flag.Flag) bool {
+	t := reflect.TypeOf(f.Value)
+	var zero reflect.Value
+	if t.Kind() == reflect.Pointer {
+		zero = reflect.New(t.Elem())
+	} else {
+		zero = reflect.Zero(t)
+	}
+	return f.DefValue == zero.Interface().(flag.Value).String()
+}
+
+func isStringFlag(f *flag.Flag) bool {
+	t := reflect.TypeOf(f.Value)
+	return t.Kind() == reflect.Pointer && t.Elem().Kind() == reflect.String
+}
+
+// usePlainOutput reports whether the code should be drawn with block glyphs
+// instead of ANSI colors. Colors only help on a terminal, and --plain asks for
+// text that stays intact when it is copied, so either one selects glyphs.
+func usePlainOutput(plain, terminal bool) bool {
+	return plain || !terminal
 }
 
 // normalize adds a https:// scheme to inputs that do not already carry one, so
@@ -198,8 +304,13 @@ func readLines(r io.Reader) ([]string, error) {
 // render draws the QR bitmap using half-block glyphs, so two module rows are
 // packed into one terminal line. Each cell sets the foreground for the top
 // module and the background for the bottom one.
-func render(w io.Writer, bitmap [][]bool, border int, plain, invert bool) error {
-	if invert {
+func render(w io.Writer, bitmap [][]bool, border int, plain, darkBG bool) error {
+	// A dark background is only meaningful for glyph output. The colored
+	// renderer picks explicit black and white, so its polarity is already
+	// correct on any terminal and flipping it would only produce a code that
+	// does not scan.
+	darkBG = darkBG && plain
+	if darkBG {
 		for y := range bitmap {
 			for x := range bitmap[y] {
 				bitmap[y][x] = !bitmap[y][x]
@@ -210,13 +321,15 @@ func render(w io.Writer, bitmap [][]bool, border int, plain, invert bool) error 
 	dim := len(bitmap)
 	size := dim + 2*border
 
-	// isDark reports whether the module at (x, y) is dark, treating the quiet
-	// zone and any padding below the symbol as light.
+	// isDark reports whether the module at (x, y) is dark. The quiet zone
+	// follows the page background: light normally, dark when the code is drawn
+	// for a dark background, so the glyph polarity stays consistent with the
+	// modules around it.
 	isDark := func(x, y int) bool {
 		x -= border
 		y -= border
 		if x < 0 || y < 0 || x >= dim || y >= dim {
-			return false
+			return darkBG
 		}
 		return bitmap[y][x]
 	}
