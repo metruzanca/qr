@@ -63,6 +63,31 @@ func TestRun(t *testing.T) {
 		}
 	})
 
+	t.Run("version", func(t *testing.T) {
+		var out bytes.Buffer
+		if err := run([]string{"--version"}, strings.NewReader(""), &out); err != nil {
+			t.Fatal(err)
+		}
+		got := out.String()
+		if want := "qr " + versionText() + "\n"; got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+		// --version must exit before any code is drawn, even with inputs.
+		if strings.ContainsRune(got, '█') || strings.ContainsRune(got, '▀') {
+			t.Errorf("--version drew a code: %q", got)
+		}
+	})
+
+	t.Run("version wins over input", func(t *testing.T) {
+		var out bytes.Buffer
+		if err := run([]string{"--version", "example.com"}, strings.NewReader(""), &out); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := out.String(), "qr "+versionText()+"\n"; got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
 	t.Run("bad level", func(t *testing.T) {
 		var out bytes.Buffer
 		if err := run([]string{"--level", "nope", "x"}, strings.NewReader(""), &out); err == nil {
@@ -164,6 +189,23 @@ func TestAgentSnippet(t *testing.T) {
 	}
 }
 
+func TestVersionText(t *testing.T) {
+	old := version
+	t.Cleanup(func() { version = old })
+
+	version = "v1.2.3"
+	if got := versionText(); got != "v1.2.3" {
+		t.Errorf("with a linker version: got %q", got)
+	}
+
+	// Without the linker flag the module version is used when there is one,
+	// and "dev" otherwise. Both are covered by never returning an empty string.
+	version = ""
+	if got := versionText(); got == "" {
+		t.Error("versionText returned an empty string")
+	}
+}
+
 func TestUsePlainOutput(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -203,11 +245,12 @@ func TestHelp(t *testing.T) {
 	fs.Bool("plain", false, "no ANSI colors")
 	fs.String("level", "medium", "error correction level")
 	fs.Int("border", 2, "quiet zone width in modules")
+	fs.Bool("version", false, "print the version and exit")
 	var out bytes.Buffer
 	writeHelp(&out, fs)
 	for _, want := range []string{
 		"Usage:", "Examples:", "qr https://example.com",
-		"--plain", "--level", "(default \"medium\")", "(default 2)",
+		"--version", "--plain", "--level", "(default \"medium\")", "(default 2)",
 		"AGENTS.md", "CLAUDE.md", `qr --plain --dark "<url>"`,
 	} {
 		if !strings.Contains(out.String(), want) {

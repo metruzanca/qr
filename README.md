@@ -43,14 +43,15 @@ qr                          # no input and a terminal: shows the help screen
 
 Flags:
 
-| Flag       | Meaning                                                          |
-| ---------- | ---------------------------------------------------------------- |
-| `--level`  | error correction: `low`, `medium` (default), `quartile`, `highest` |
-| `--border` | quiet zone in modules, default `2`                               |
-| `--plain`  | draw with block glyphs instead of ANSI colors, even on a terminal |
-| `--dark`   | the background is dark: light modules become the blocks          |
-| `--light`  | the background is light, the default                             |
-| `--raw`    | encode the input exactly, without adding a `https://` scheme     |
+| Flag        | Meaning                                                       |
+| ----------- | ------------------------------------------------------------- |
+| `--level`   | error correction: `low`, `medium` (default), `quartile`, `highest` |
+| `--border`  | quiet zone in modules, default `2`                            |
+| `--plain`   | draw with block glyphs instead of ANSI colors, even on a terminal |
+| `--dark`    | the background is dark: light modules become the blocks       |
+| `--light`   | the background is light, the default                          |
+| `--raw`     | encode the input exactly, without adding a `https://` scheme  |
+| `--version` | print the version and exit                                    |
 
 Both `--flag` and `-flag` parse, but the docs use two dashes throughout.
 

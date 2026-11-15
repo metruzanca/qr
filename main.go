@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"reflect"
+	"runtime/debug"
 	"strings"
 
 	qrcode "github.com/skip2/go-qrcode"
@@ -35,6 +36,11 @@ const (
 	bgDark   = "\x1b[40m"
 	bgLight  = "\x1b[107m"
 )
+
+// version is the release version, injected at build time by GoReleaser with
+// -ldflags "-X main.version=...". Builds that skip the linker flag fall back to
+// the module version recorded by `go install ...@vX.Y.Z`, then to "dev".
+var version = ""
 
 func main() {
 	if err := run(os.Args[1:], os.Stdin, os.Stdout); err != nil {
@@ -52,15 +58,20 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 	fs.Usage = func() { writeHelp(fs.Output(), fs) }
 
 	var (
-		level  = fs.String("level", "medium", "error correction level: low, medium, quartile, highest")
-		border = fs.Int("border", 2, "quiet zone width in modules")
-		plain  = fs.Bool("plain", false, "draw with block glyphs instead of ANSI colors, even on a terminal")
-		dark   = fs.Bool("dark", false, "the background is dark: light modules are drawn with blocks (plain output only)")
-		light  = fs.Bool("light", false, "the background is light, the default (plain output only)")
-		raw    = fs.Bool("raw", false, "encode input exactly, without adding a https:// scheme")
+		level       = fs.String("level", "medium", "error correction level: low, medium, quartile, highest")
+		border      = fs.Int("border", 2, "quiet zone width in modules")
+		plain       = fs.Bool("plain", false, "draw with block glyphs instead of ANSI colors, even on a terminal")
+		dark        = fs.Bool("dark", false, "the background is dark: light modules are drawn with blocks (plain output only)")
+		light       = fs.Bool("light", false, "the background is light, the default (plain output only)")
+		raw         = fs.Bool("raw", false, "encode input exactly, without adding a https:// scheme")
+		showVersion = fs.Bool("version", false, "print the version and exit")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *showVersion {
+		fmt.Fprintf(stdout, "qr %s\n", versionText())
+		return nil
 	}
 	if *dark && *light {
 		return errors.New("--dark and --light are mutually exclusive")
@@ -125,6 +136,21 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 	return nil
 }
 
+// versionText is the value reported by --version. The linker flag wins, so
+// release builds name their tag; otherwise a `go install` binary can report the
+// module version the toolchain stamped into it.
+func versionText() string {
+	if version != "" {
+		return version
+	}
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		if v := bi.Main.Version; v != "" && v != "(devel)" {
+			return v
+		}
+	}
+	return "dev"
+}
+
 // writeHelp prints the usage and examples screen. It is used both for --help
 // and when the command runs without input.
 func writeHelp(w io.Writer, fs *flag.FlagSet) {
@@ -183,8 +209,8 @@ The glyphs are data, not ASCII art: do not re-wrap, re-indent or tidy them.
 Use --light instead of --dark on a light background.`
 
 // flagOrder lists the flags in the order the help screen shows them: output
-// format first, then code shape, then input handling.
-var flagOrder = []string{"plain", "dark", "light", "level", "border", "raw"}
+// format first, then code shape, then input handling, then the version flag.
+var flagOrder = []string{"plain", "dark", "light", "level", "border", "raw", "version"}
 
 // writeFlags prints the flag list with the double-dash prefix used in the
 // examples. The flag package accepts both forms but prints single dashes, so
