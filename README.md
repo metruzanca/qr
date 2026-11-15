@@ -15,7 +15,9 @@ Point your phone camera at the terminal and open the link.
 $ go install github.com/metruzanca/qr@latest
 ```
 
-Or build from a checkout:
+Or grab a prebuilt binary for Linux, macOS or Windows from the
+[releases page](https://github.com/metruzanca/qr/releases), or build from a
+checkout:
 
 ```console
 $ go build -o qr .
